@@ -55,17 +55,22 @@ extern char ps2pipad_fiq, ps2pipad_fiq_end;
 #define PIN_ATN (1u << 25)
 
 static void handle_pin_change(void) {
-    void __iomem* gplev0 = gpio_base + GPIO_GPLEV0;
-    //uint32_t pins = readl(gplev0);
-    //if (pins & PIN_ATN) {
-    //    dbgprintf("ATN high initially?!?\r\n");
-    //    goto out;
-    //}
-
     uint8_t dat_bytes[128];
     uint8_t cmd_bytes[128];
     size_t byte_idx = 0;
-    uint32_t pins;
+
+    void __iomem* gplev0 = gpio_base + GPIO_GPLEV0;
+    uint32_t pins = readl(gplev0);
+    bool atn_initially_hi = false;
+    uint32_t atn_start_cycles, atn_end_cycles;
+    if (pins & PIN_ATN) {
+        atn_initially_hi = true;
+        atn_start_cycles = ccnt_read();
+        while (readl(gplev0) & PIN_ATN)
+            ;
+        atn_end_cycles = ccnt_read();
+    }
+
     while (1) {
         unsigned cmd_byte = 0;
         unsigned dat_byte = 0;
@@ -113,6 +118,10 @@ static void handle_pin_change(void) {
         if (pins & PIN_ATN)
             break;
     }
+    if (atn_initially_hi) {
+        dbgprintf("atn hi for %u cycles\r\n", atn_end_cycles - atn_start_cycles);
+    }
+#if 1
     dbgprintf("CMD: ");
     for (size_t i = 0; i < byte_idx; i++) {
         dbgprintf("%02x", cmd_bytes[i]);
@@ -123,6 +132,7 @@ static void handle_pin_change(void) {
         dbgprintf("%02x", dat_bytes[i]);
     }
     dbgprintf("\r\n");
+#endif
 
     // ack interrupts
 out:
