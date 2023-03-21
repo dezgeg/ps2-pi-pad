@@ -3,6 +3,12 @@
 #include <linux/io.h>
 #include <asm/fiq.h>
 
+static inline u32 ccnt_read(void) {
+    u32 cc;
+    asm volatile("mrc p15, 0, %0, c15, c12, 1" : "=r" (cc));
+    return cc;
+}
+
 // UART stuff
 #define UART_BASE 0x20201000
 #define UART_DR 0x0
@@ -17,8 +23,7 @@ static void dbgc(char c) {
     writel((u32)c, uart_base + UART_DR);
 }
 
-static void dbgprintf(const char* format, ...)
-{
+static void dbgprintf(const char* format, ...) {
     char buf[512];
     va_list ap;
 
@@ -45,11 +50,29 @@ static unsigned long fiq_stack[1024];
 
 extern char ps2pipad_fiq, ps2pipad_fiq_end;
 
+static u32 max_delta = 0;
+
 static void handle_pin_change(void) {
+#define PIN_ATN (1u << 25)
+    u32 prev_ticks = ccnt_read();
+    while ((readl(gpio_base + GPIO_GPLEV0) & PIN_ATN) == 0) {
+        u32 ticks = ccnt_read();
+        u32 delta = ticks - prev_ticks;
+        if (delta > max_delta) {
+            max_delta = delta;
+            dbgprintf("new delta %u (%u -> %u)", max_delta, prev_ticks, ticks);
+            prev_ticks = ccnt_read();
+        } else {
+            prev_ticks = ticks;
+        }
+        dsb(sy);
+    }
+
     // ack interrupts
-    uint32_t events = readl(gpio_base + GPIO_GPEDS0);
-    writel(events, gpio_base + GPIO_GPEDS0);
-    dbgprintf("events was: 0x%08x", events);
+    {
+        uint32_t events = readl(gpio_base + GPIO_GPEDS0);
+        writel(events, gpio_base + GPIO_GPEDS0);
+    }
 }
 
 int init_module() {
@@ -87,17 +110,7 @@ int init_module() {
         set_fiq_handler(fiq_handler, fiq_handler_length);
 
         memset(&fiq_regs, 0, sizeof(fiq_regs));
-        fiq_regs.ARM_r0 = 0xABCDEF00;
-        fiq_regs.ARM_r1 = 0xABCDEF01;
-        fiq_regs.ARM_r2 = 0xABCDEF02;
-        fiq_regs.ARM_r3 = 0xABCDEF03;
-        fiq_regs.ARM_r4 = 0xABCDEF04;
-        fiq_regs.ARM_r5 = 0xABCDEF05;
-        fiq_regs.ARM_r6 = 0xABCDEF06;
-        fiq_regs.ARM_r7 = 0xABCDEF07;
         fiq_regs.ARM_r8 = (unsigned long)handle_pin_change;
-        fiq_regs.ARM_r9 = 0xABCDEF09;
-        fiq_regs.ARM_r10 = 0xABCDEF10;
         fiq_regs.ARM_sp = ((unsigned long)&fiq_stack) + sizeof(fiq_stack) - 4;
         set_fiq_regs(&fiq_regs);
         enable_fiq(73); // TODO don't hardcode
