@@ -32,8 +32,6 @@ static void dbgprintf(const char* format, ...) {
     va_end(ap);
     for (size_t i = 0; buf[i]; i++)
         dbgc(buf[i]);
-    dbgc('\r');
-    dbgc('\n');
 }
 
 // GPIO FIQ stuff
@@ -50,25 +48,84 @@ static unsigned long fiq_stack[1024];
 
 extern char ps2pipad_fiq, ps2pipad_fiq_end;
 
-static u32 max_delta = 0;
+#define PIN_ACK (1u << 7)
+#define PIN_DAT (1u << 8)
+#define PIN_CLK (1u << 9)
+#define PIN_CMD (1u << 11)
+#define PIN_ATN (1u << 25)
 
 static void handle_pin_change(void) {
-#define PIN_ATN (1u << 25)
-    u32 prev_ticks = ccnt_read();
-    while ((readl(gpio_base + GPIO_GPLEV0) & PIN_ATN) == 0) {
-        u32 ticks = ccnt_read();
-        u32 delta = ticks - prev_ticks;
-        if (delta > max_delta) {
-            max_delta = delta;
-            dbgprintf("new delta %u (%u -> %u)", max_delta, prev_ticks, ticks);
-            prev_ticks = ccnt_read();
-        } else {
-            prev_ticks = ticks;
+    void __iomem* gplev0 = gpio_base + GPIO_GPLEV0;
+    //uint32_t pins = readl(gplev0);
+    //if (pins & PIN_ATN) {
+    //    dbgprintf("ATN high initially?!?\r\n");
+    //    goto out;
+    //}
+
+    uint8_t dat_bytes[128];
+    uint8_t cmd_bytes[128];
+    size_t byte_idx = 0;
+    uint32_t pins;
+    while (1) {
+        unsigned cmd_byte = 0;
+        unsigned dat_byte = 0;
+        for (size_t bit = 0; bit < 8; bit++) {
+            // Wait for falling edge on CLK
+            while ((pins = readl(gplev0)) & PIN_CLK) {
+                if (pins & PIN_ATN) {
+                    dbgprintf("ERR: ATN went high early 1 (byte %zu bit %zu cmd 0x%02x dat 0x%02x)\r\n", byte_idx, bit, cmd_byte, dat_byte);
+                    goto out;
+                }
+                if (!(pins & PIN_ACK)) {
+                    dbgprintf("ERR: ACK went low early 1 (byte %zu bit %zu cmd 0x%02x dat 0x%02x)\r\n", byte_idx, bit, cmd_byte, dat_byte);
+                    goto out;
+                }
+            }
+            // Here we would switch output
+
+            // Wait for rising edge on CLK
+            while (!((pins = readl(gplev0)) & PIN_CLK)) {
+                if (pins & PIN_ATN) {
+                    dbgprintf("ERR: ATN went high early 2 (byte %zu bit %zu cmd 0x%02x dat 0x%02x)\r\n", byte_idx, bit, cmd_byte, dat_byte);
+                    goto out;
+                }
+                if (!(pins & PIN_ACK)) {
+                    dbgprintf("ERR: ACK went low early 2 (byte %zu bit %zu cmd 0x%02x dat 0x%02x)\r\n", byte_idx, bit, cmd_byte, dat_byte);
+                    goto out;
+                }
+            }
+            cmd_byte >>= 1;
+            dat_byte >>= 1;
+            if (pins & PIN_CMD)
+                cmd_byte |= 0x80;
+            if (pins & PIN_DAT)
+                dat_byte |= 0x80;
         }
-        dsb(sy);
+        dat_bytes[byte_idx] = dat_byte;
+        cmd_bytes[byte_idx] = cmd_byte;
+        byte_idx++;
+
+        // Wait for ACK to toggle or ATN go high
+        while ((pins = readl(gplev0)) & PIN_ACK && !(pins & PIN_ATN)) {
+        }
+        while (!((pins = readl(gplev0)) & PIN_ACK) && !(pins & PIN_ATN)) {
+        }
+        if (pins & PIN_ATN)
+            break;
     }
+    dbgprintf("CMD: ");
+    for (size_t i = 0; i < byte_idx; i++) {
+        dbgprintf("%02x", cmd_bytes[i]);
+    }
+    dbgprintf("\r\n");
+    dbgprintf("DAT: ");
+    for (size_t i = 0; i < byte_idx; i++) {
+        dbgprintf("%02x", dat_bytes[i]);
+    }
+    dbgprintf("\r\n");
 
     // ack interrupts
+out:
     {
         uint32_t events = readl(gpio_base + GPIO_GPEDS0);
         writel(events, gpio_base + GPIO_GPEDS0);
