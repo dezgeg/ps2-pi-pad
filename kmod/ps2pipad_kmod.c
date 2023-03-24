@@ -58,16 +58,212 @@ extern char ps2pipad_fiq, ps2pipad_fiq_end;
 static u32 prev_fiq_start;
 static u32 prev_fiq_end;
 
+static uint8_t dat_bytes[128];
+static uint8_t cmd_bytes[128];
+
+#define MODE_DIGITAL 0x41
+#define MODE_ANALOG 0x73
+#define MODE_DS2_NATIVE 0x79
+
+// State variables
+static uint32_t mode = MODE_DIGITAL;
+static bool in_config = false;
+static uint8_t vibration_map[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+static bool analog_locked = false;
+
+// State variables to be switched to at end of transaction
+static uint32_t new_mode = MODE_DIGITAL;
+static bool new_in_config = false;
+
+// Verifier
+static uint8_t expected_dat_resp[128];
+static bool compare_dat_resp = false;
+static bool check_in_config = false;
+static bool known_command = false;
+
+#define CHECK(val, exp) do_check(val, exp, #val)
+static void do_check(uint32_t value, uint32_t expected, const char* what) {
+    if (value != expected)
+        dbgprintf("WRN: unexpected %s: 0x%02x, expecting: 0x%02x\r\n", what, value, expected);
+}
+
+static const u8 CMD_40_RESP[] = { 0x00, 0x00, 0x02, 0x00, 0x00, 0x5a };
+static const u8 CMD_45_RESP_TEMPLATE[] = { 0x03, 0x02, 0x00, 0x02, 0x01, 0x00 };
+static const u8 CMD_46_RESP_PAGE0[] = { 0x00, 0x00, 0x01, 0x02, 0x00, 0x0a };
+static const u8 CMD_46_RESP_PAGE1[] = { 0x00, 0x00, 0x01, 0x01, 0x01, 0x14 };
+static const u8 CMD_47_RESP[] = { 0x00, 0x00, 0x02, 0x00, 0x01, 0x00 };
+static const u8 CMD_4C_RESP_PAGE0[] = { 0x00, 0x00, 0x00, 0x04, 0x00, 0x00 };
+static const u8 CMD_4C_RESP_PAGE1[] = { 0x00, 0x00, 0x00, 0x07, 0x00, 0x00 };
+#define CONFIG_RESP_SIZE 6
+
+static void got_byte(size_t index) {
+    // Static field checks
+    if (index == 0) {
+        // Initialize
+        compare_dat_resp = false;
+        check_in_config = false;
+        known_command = false;
+
+        CHECK(cmd_bytes[0], 0x01);
+        CHECK(dat_bytes[0], 0xff);
+        return;
+    }
+
+    // if (index == 2) {
+        // CHECK(cmd_bytes[2], 0x00);
+        // CHECK(dat_bytes[2], 0x5a);
+        // return;
+    // }
+
+    // Commands without any data dependencies on parameters
+    uint32_t cmd = cmd_bytes[1];
+    if (index == 1) {
+        switch (cmd) {
+            case 0x40: {
+                compare_dat_resp = true;
+                check_in_config = true;
+                known_command = true;
+                memcpy(expected_dat_resp, CMD_40_RESP, CONFIG_RESP_SIZE);
+                break;
+            }
+            case 0x41: {
+                compare_dat_resp = true;
+                check_in_config = true;
+                known_command = true;
+                if (mode == MODE_DIGITAL) {
+                    memset(expected_dat_resp, 0, CONFIG_RESP_SIZE);
+                } else {
+                    dbgprintf("todo cmd41 non digital\r\n");
+                }
+                break;
+            }
+            case 0x42: {
+                // TODO:
+                known_command = true;
+                break;
+            }
+            case 0x44: {
+                // data bytes read later:
+                compare_dat_resp = true;
+                check_in_config = true;
+                known_command = true;
+                memset(expected_dat_resp, 0, CONFIG_RESP_SIZE);
+                break;
+            }
+            case 0x45: {
+                check_in_config = true;
+                known_command = true;
+                memcpy(expected_dat_resp, CMD_45_RESP_TEMPLATE, CONFIG_RESP_SIZE);
+                expected_dat_resp[2] = mode != MODE_DIGITAL;
+                break;
+            }
+            case 0x4d: {
+                check_in_config = true;
+                known_command = true;
+                memcpy(expected_dat_resp, vibration_map, CONFIG_RESP_SIZE);
+                break;
+            }
+        }
+    }
+
+    // Constant queries have data dependencies
+    if (index == 3) {
+        switch (cmd) {
+            case 0x43: {
+                new_in_config = cmd_bytes[3] == 1;
+                known_command = true;
+                break;
+            }
+            case 0x46: {
+                compare_dat_resp = true;
+                check_in_config = true;
+                known_command = true;
+                if (cmd_bytes[3] == 0)
+                    memcpy(expected_dat_resp, CMD_46_RESP_PAGE0, CONFIG_RESP_SIZE);
+                else if (cmd_bytes[3] == 1)
+                    memcpy(expected_dat_resp, CMD_46_RESP_PAGE1, CONFIG_RESP_SIZE);
+                else
+                    dbgprintf("unknown cmd 46 page %u\r\n", cmd_bytes[3]);
+                break;
+            }
+            case 0x4c: {
+                compare_dat_resp = true;
+                check_in_config = true;
+                known_command = true;
+                if (cmd_bytes[3] == 0)
+                    memcpy(expected_dat_resp, CMD_4C_RESP_PAGE0, CONFIG_RESP_SIZE);
+                else if (cmd_bytes[3] == 1)
+                    memcpy(expected_dat_resp, CMD_4C_RESP_PAGE1, CONFIG_RESP_SIZE);
+                else
+                    dbgprintf("unknown cmd 4c page %u\r\n", cmd_bytes[3]);
+                break;
+            }
+            case 0x47: {
+                compare_dat_resp = true;
+                check_in_config = true;
+                known_command = true;
+                CHECK(dat_bytes[4], 0x00);
+                memcpy(expected_dat_resp, CMD_47_RESP, CONFIG_RESP_SIZE);
+                break;
+            }
+
+
+        }
+    }
+
+    if (cmd == 0x44 && index == 3) {
+        if (cmd_bytes[3])
+            mode = MODE_ANALOG;
+        else
+            mode = MODE_DIGITAL;
+    }
+    if (cmd == 0x44 && index == 4) {
+        analog_locked = cmd_bytes[4];
+    }
+
+    if (cmd == 0x4d && index >= 3 && index - 3 < 6) {
+        vibration_map[index - 3] = cmd_bytes[index - 3];
+    }
+}
+
+static void transaction_over(size_t len) {
+    if (!known_command) {
+        dbgprintf("unknown command 0x%02x\r\n", cmd_bytes[1]);
+    }
+    if (check_in_config && !in_config) {
+        dbgprintf("expected to be in config mode\r\n");
+    }
+    size_t expected_len = 3;
+    if (in_config) {
+        expected_len = 9;
+    } else if (mode == MODE_DIGITAL) {
+        expected_len = 5;
+    } else if (mode == MODE_ANALOG) {
+        expected_len = 5;
+    } else if (mode == MODE_DS2_NATIVE) {
+        expected_len = 21;
+    }
+    CHECK(len, expected_len);
+    if (compare_dat_resp) {
+        if (memcmp(dat_bytes + 3, expected_dat_resp, expected_len - 3)) {
+            dbgprintf("mismatch\r\n");
+        }
+    }
+
+    in_config = new_in_config;
+    new_mode = mode;
+}
+
 static void handle_pin_change(void) {
     uint32_t fiq_start = ccnt_read();
-    uint8_t dat_bytes[128];
-    uint8_t cmd_bytes[128];
     size_t byte_idx = 0;
 
     void __iomem* gplev0 = gpio_base + GPIO_GPLEV0;
     uint32_t pins = readl(gplev0);
     bool atn_initially_hi = false;
     uint32_t atn_start_cycles, atn_end_cycles;
+    bool ended_with_ack = false;
+
     if (pins & PIN_ATN) {
         atn_initially_hi = true;
         atn_start_cycles = ccnt_read();
@@ -113,20 +309,30 @@ static void handle_pin_change(void) {
         }
         dat_bytes[byte_idx] = dat_byte;
         cmd_bytes[byte_idx] = cmd_byte;
+        got_byte(byte_idx);
         byte_idx++;
 
+        ended_with_ack = false;
         // Wait for ACK to toggle or ATN go high
         while ((pins = readl(gplev0)) & PIN_ACK && !(pins & PIN_ATN)) {
         }
-        while (!((pins = readl(gplev0)) & PIN_ACK) && !(pins & PIN_ATN)) {
+
+        if (!(pins & PIN_ACK)) {
+            ended_with_ack = true;
+            while (!((pins = readl(gplev0)) & PIN_ACK) && !(pins & PIN_ATN)) {
+            }
         }
+
         if (pins & PIN_ATN)
             break;
     }
+
+    transaction_over(byte_idx);
+
     if (atn_initially_hi) {
         dbgprintf("atn hi for %u cycles\r\n", atn_end_cycles - atn_start_cycles);
     }
-#if 0
+#if 1
     dbgprintf("CMD: ");
     for (size_t i = 0; i < byte_idx; i++) {
         dbgprintf("%02x", cmd_bytes[i]);
@@ -136,9 +342,10 @@ static void handle_pin_change(void) {
     for (size_t i = 0; i < byte_idx; i++) {
         dbgprintf("%02x", dat_bytes[i]);
     }
+    dbgprintf("%c\r\n", ended_with_ack ? '+' : '-');
     dbgprintf("\r\n");
 #else
-    dbgprintf("%u %u %zu %02x %02x\r\n", prev_fiq_end - prev_fiq_start, fiq_start - prev_fiq_end, byte_idx, cmd_bytes[1], dat_bytes[1]);
+    dbgprintf("%u %u %zu %02x %02x %c\r\n", prev_fiq_end - prev_fiq_start, fiq_start - prev_fiq_end, byte_idx, cmd_bytes[1], dat_bytes[1], ended_with_ack ? '+' : '-');
 #endif
 
     // ack interrupts
