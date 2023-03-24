@@ -54,7 +54,11 @@ extern char ps2pipad_fiq, ps2pipad_fiq_end;
 #define PIN_CMD (1u << 11)
 #define PIN_ATN (1u << 25)
 
+static u32 prev_fiq_start;
+static u32 prev_fiq_end;
+
 static void handle_pin_change(void) {
+    uint32_t fiq_start = ccnt_read();
     uint8_t dat_bytes[128];
     uint8_t cmd_bytes[128];
     size_t byte_idx = 0;
@@ -121,7 +125,7 @@ static void handle_pin_change(void) {
     if (atn_initially_hi) {
         dbgprintf("atn hi for %u cycles\r\n", atn_end_cycles - atn_start_cycles);
     }
-#if 1
+#if 0
     dbgprintf("CMD: ");
     for (size_t i = 0; i < byte_idx; i++) {
         dbgprintf("%02x", cmd_bytes[i]);
@@ -132,6 +136,8 @@ static void handle_pin_change(void) {
         dbgprintf("%02x", dat_bytes[i]);
     }
     dbgprintf("\r\n");
+#else
+    dbgprintf("%u %u %zu %02x %02x\r\n", prev_fiq_end - prev_fiq_start, fiq_start - prev_fiq_end, byte_idx, cmd_bytes[1], dat_bytes[1]);
 #endif
 
     // ack interrupts
@@ -140,6 +146,9 @@ out:
         uint32_t events = readl(gpio_base + GPIO_GPEDS0);
         writel(events, gpio_base + GPIO_GPEDS0);
     }
+    uint32_t fiq_end = ccnt_read();
+    prev_fiq_start = fiq_start;
+    prev_fiq_end = fiq_end;
 }
 
 int init_module() {
