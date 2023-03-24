@@ -1,6 +1,7 @@
-#include <linux/module.h>
-#include <linux/kernel.h>
+#include <linux/delay.h>
 #include <linux/io.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
 #include <asm/fiq.h>
 
 static inline u32 ccnt_read(void) {
@@ -197,6 +198,11 @@ int init_module() {
 }
 
 void cleanup_module() {
+    disable_fiq(73);
+    msleep(10);
+    release_fiq(&fh);
+    iounmap(gpio_base);
+    iounmap(uart_base);
 }
 
 MODULE_LICENSE("GPL");
