@@ -58,8 +58,8 @@ extern char ps2pipad_fiq, ps2pipad_fiq_end;
 static u32 prev_fiq_start;
 static u32 prev_fiq_end;
 
-static uint8_t dat_bytes[128];
-static uint8_t cmd_bytes[128];
+static uint8_t dat_bytes[256];
+static uint8_t cmd_bytes[256];
 
 #define MODE_DIGITAL 0x41
 #define MODE_ANALOG 0x73
@@ -70,13 +70,14 @@ static uint32_t mode = MODE_DIGITAL;
 static bool in_config = false;
 static uint8_t vibration_map[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 static bool analog_locked = false;
+static uint32_t mask[] = { 0xff, 0xff, 0x03 };
 
 // State variables to be switched to at end of transaction
 static uint32_t new_mode = MODE_DIGITAL;
 static bool new_in_config = false;
 
 // Verifier
-static uint8_t expected_dat_resp[128];
+static uint8_t expected_dat_resp[256];
 static bool compare_dat_resp = false;
 static bool check_in_config = false;
 static bool known_command = false;
