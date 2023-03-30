@@ -132,10 +132,12 @@ static void got_byte(size_t index) {
                 compare_dat_resp = true;
                 check_in_config = true;
                 known_command = true;
-                if (mode == MODE_DIGITAL) {
-                    memset(expected_dat_resp, 0, CONFIG_RESP_SIZE);
-                } else {
-                    dbgprintf("todo cmd41 non digital\r\n");
+                memset(expected_dat_resp, 0, CONFIG_RESP_SIZE);
+                if (mode != MODE_DIGITAL) {
+                    expected_dat_resp[0] = mask[0];
+                    expected_dat_resp[1] = mask[1];
+                    expected_dat_resp[2] = mask[2];
+                    expected_dat_resp[5] = 0x5a;
                 }
                 break;
             }
@@ -223,9 +225,9 @@ static void got_byte(size_t index) {
 
     if (cmd == 0x44 && index == 3) {
         if (cmd_bytes[3])
-            mode = MODE_ANALOG;
+            new_mode = MODE_ANALOG;
         else
-            mode = MODE_DIGITAL;
+            new_mode = MODE_DIGITAL;
     }
     if (cmd == 0x44 && index == 4) {
         analog_locked = cmd_bytes[4];
@@ -244,7 +246,7 @@ static void transaction_over(size_t len) {
     if (!known_command) {
         dbgprintf("unknown command 0x%02x\r\n", cmd_bytes[1]);
     }
-    if (check_in_config && !in_config) {
+    if (check_in_config && !new_in_config) {
         dbgprintf("expected to be in config mode\r\n");
     }
     size_t expected_len = 3;
@@ -253,19 +255,30 @@ static void transaction_over(size_t len) {
     } else if (mode == MODE_DIGITAL) {
         expected_len = 5;
     } else if (mode == MODE_ANALOG) {
-        expected_len = 5;
+        expected_len = 9;
     } else if (mode == MODE_DS2_NATIVE) {
         expected_len = 21;
     }
-    CHECK(len, expected_len);
+    if (len != expected_len) {
+        dbgprintf("len expected %u got %u mode 0x%02x 0x%02x config %u %u\r\n",
+                expected_len, len, mode, new_mode, in_config, new_in_config);
+    }
     if (compare_dat_resp) {
         if (memcmp(dat_bytes + 3, expected_dat_resp, expected_len - 3)) {
-            dbgprintf("mismatch\r\n");
+            dbgprintf("mismatch, expect: ");
+            for (size_t i = 0; i < expected_len - 3; i++) {
+                dbgprintf("%02x", expected_dat_resp[i]);
+            }
+            dbgprintf(" got: ");
+            for (size_t i = 0; i < expected_len - 3; i++) {
+                dbgprintf("%02x", dat_bytes[i + 3]);
+            }
+            dbgprintf("\r\n");
         }
     }
 
     in_config = new_in_config;
-    new_mode = mode;
+    mode = new_mode;
 }
 
 static void handle_pin_change(void) {
@@ -346,7 +359,7 @@ static void handle_pin_change(void) {
     if (atn_initially_hi) {
         dbgprintf("atn hi for %u cycles\r\n", atn_end_cycles - atn_start_cycles);
     }
-#if 1
+#if 0
     dbgprintf("CMD: ");
     for (size_t i = 0; i < byte_idx; i++) {
         dbgprintf("%02x", cmd_bytes[i]);
