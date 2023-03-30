@@ -95,6 +95,7 @@ static const u8 CMD_46_RESP_PAGE1[] = { 0x00, 0x00, 0x01, 0x01, 0x01, 0x14 };
 static const u8 CMD_47_RESP[] = { 0x00, 0x00, 0x02, 0x00, 0x01, 0x00 };
 static const u8 CMD_4C_RESP_PAGE0[] = { 0x00, 0x00, 0x00, 0x04, 0x00, 0x00 };
 static const u8 CMD_4C_RESP_PAGE1[] = { 0x00, 0x00, 0x00, 0x07, 0x00, 0x00 };
+static const u8 CMD_4F_RESP[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x5A };
 #define CONFIG_RESP_SIZE 6
 
 static void got_byte(size_t index) {
@@ -164,6 +165,14 @@ static void got_byte(size_t index) {
                 memcpy(expected_dat_resp, vibration_map, CONFIG_RESP_SIZE);
                 break;
             }
+            case 0x4f: {
+                check_in_config = true;
+                known_command = true;
+                compare_dat_resp = true;
+                new_mode = MODE_DS2_NATIVE;
+                memcpy(expected_dat_resp, CMD_4F_RESP, CONFIG_RESP_SIZE);
+                break;
+            }
         }
     }
 
@@ -224,6 +233,10 @@ static void got_byte(size_t index) {
 
     if (cmd == 0x4d && index >= 3 && index - 3 < 6) {
         vibration_map[index - 3] = cmd_bytes[index - 3];
+    }
+
+    if (cmd == 0x4f && index >= 3 && index - 3 < 3) {
+        mask[index - 3] = cmd_bytes[index - 3];
     }
 }
 
