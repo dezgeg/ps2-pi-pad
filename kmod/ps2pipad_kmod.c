@@ -1,8 +1,15 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/proc_fs.h>
 #include <asm/fiq.h>
+
+struct user_comm {
+    bool reset;
+};
+static struct user_comm* user_page;
 
 static inline u32 ccnt_read(void) {
     u32 cc;
@@ -66,11 +73,11 @@ static uint8_t cmd_bytes[256];
 #define MODE_DS2_NATIVE 0x79
 
 // State variables
-static uint32_t mode = MODE_DIGITAL;
-static bool in_config = false;
-static uint8_t vibration_map[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-static bool analog_locked = false;
-static uint32_t mask[] = { 0xff, 0xff, 0x03 };
+static uint32_t mode;
+static bool in_config;
+static uint8_t vibration_map[6];
+static bool analog_locked;
+static uint32_t mask[3];
 
 // State variables to be switched to at end of transaction
 static uint32_t new_mode = MODE_DIGITAL;
@@ -282,6 +289,19 @@ static void transaction_over(size_t len) {
     mode = new_mode;
 }
 
+static void reset_state(void) {
+    mode = MODE_DIGITAL;
+    in_config = false;
+    memset(vibration_map, 0xff, sizeof(vibration_map));
+    analog_locked = false;
+    mask[0] = 0xff;
+    mask[1] = 0xff;
+    mask[2] = 0x03;
+
+    new_mode = mode;
+    new_in_config = in_config;
+}
+
 static void handle_pin_change(void) {
     uint32_t fiq_start = ccnt_read();
     size_t byte_idx = 0;
@@ -298,6 +318,11 @@ static void handle_pin_change(void) {
         while (readl(gplev0) & PIN_ATN)
             ;
         atn_end_cycles = ccnt_read();
+    }
+    if (user_page->reset) {
+        dbgprintf("reset\r\n");
+        reset_state();
+        user_page->reset = false;
     }
 
     while (1) {
@@ -387,7 +412,40 @@ out:
     prev_fiq_end = fiq_end;
 }
 
+static int page_map_mmap( struct file *file, struct vm_area_struct *vma )
+{
+    if ((vma->vm_end - vma->vm_start) > PAGE_SIZE)
+        return -EINVAL;
+
+    remap_pfn_range(vma, vma->vm_start,
+                    __pa(pde_data(file_inode(file))) >> PAGE_SHIFT,
+                    PAGE_SIZE, vma->vm_page_prot);
+    return 0;
+}
+
+static const struct proc_ops page_map_proc_ops = {
+    //.proc_lseek = page_map_seek,
+    //.proc_read = page_map_read,
+    .proc_mmap = page_map_mmap,
+};
+
 int init_module() {
+    // Configure proc entry
+    struct proc_dir_entry* pde;
+    user_page = (struct user_comm*)__get_free_page(GFP_KERNEL | __GFP_ZERO);
+    if (!user_page) {
+        pr_err("Couldn't allocate page\n");
+        return -ENODEV;
+    }
+
+    pde = proc_create_data("ps2pipad", S_IFREG | 0644, NULL,
+                            &page_map_proc_ops, user_page);
+    if (!pde) {
+        pr_err("Couldn't create proc entry\n");
+        return -ENODEV;
+    }
+    proc_set_size(pde, PAGE_SIZE);
+
     // Configure CCNT cycle counter
     asm volatile("mcr p15, 0, %0, c15, c9, 0\n" :: "r"(1));
     asm volatile("mcr p15, 0, %0, c15, c12, 0\n" :: "r"(1));
@@ -408,6 +466,7 @@ int init_module() {
     }
 
     dbgprintf("hi! uart: 0x%08x gpio: 0x%08x", uart_base, gpio_base);
+    reset_state();
 
     {
         struct pt_regs fiq_regs;
