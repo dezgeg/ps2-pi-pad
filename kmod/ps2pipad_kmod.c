@@ -263,6 +263,7 @@ static void transaction_over(size_t len) {
         dbgprintf("len expected %u got %u mode 0x%02x 0x%02x config %u %u\r\n",
                 expected_len, len, mode, new_mode, in_config, new_in_config);
     }
+    CHECK(dat_bytes[1], in_config ? 0xf3 : mode);
     if (compare_dat_resp) {
         if (memcmp(dat_bytes + 3, expected_dat_resp, expected_len - 3)) {
             dbgprintf("mismatch, expect: ");
