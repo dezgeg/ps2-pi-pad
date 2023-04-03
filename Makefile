@@ -8,3 +8,7 @@ all: ps2pipad
 
 ps2pipad: usermode.c uapi.h
 	$(CC) -O3 $< -o $@
+
+run:
+	if ! lsmod | grep -q ps2pipad ; then sudo insmod ps2pipad.ko; fi
+	gpiomon --falling-edge gpiochip0 25 & sudo ./ps2pipad
