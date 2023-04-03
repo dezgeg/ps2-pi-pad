@@ -146,10 +146,6 @@ int main(int argc, char **argv)
                 }
             } else {
                 user_page->resp.analogs[linux_axis_to_pad_axis(e.number)] = 128 + (e.value >> 8);
-                //if (e.value > 0)
-                    //user_page->resp.analogs[linux_axis_to_pad_axis(e.number)] = 128 + e.value >> 9;
-                //else
-                    //user_page->resp.analogs[linux_axis_to_pad_axis(e.number)] = 128 + e.value >> 9;
             }
         } else if (e.type & JS_EVENT_BUTTON) {
             ssize_t ix = linux_button_to_pad_button(e.number);
