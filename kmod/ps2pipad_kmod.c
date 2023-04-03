@@ -6,10 +6,9 @@
 #include <linux/proc_fs.h>
 #include <asm/fiq.h>
 
-struct user_comm {
-    bool reset;
-};
-static struct user_comm* user_page;
+#include "uapi.h"
+
+static struct ps2pipad_uapi* user_page;
 
 static inline u32 ccnt_read(void) {
     u32 cc;
@@ -91,15 +90,8 @@ static uint32_t mask[3];
 static uint32_t new_mode = MODE_DIGITAL;
 static bool new_in_config = false;
 
-// Verifier
 static uint8_t dat_resp[256];
 static bool check_in_config = false;
-
-#define CHECK(val, exp) do_check(val, exp, #val)
-static void do_check(uint32_t value, uint32_t expected, const char* what) {
-    if (value != expected)
-        dbgprintf("WRN: unexpected %s: 0x%02x, expecting: 0x%02x\r\n", what, value, expected);
-}
 
 static const u8 CMD_40_RESP[] = { 0x00, 0x00, 0x02, 0x00, 0x00, 0x5a };
 static const u8 CMD_45_RESP_TEMPLATE[] = { 0x03, 0x02, 0x00, 0x02, 0x01, 0x00 };
@@ -138,7 +130,7 @@ static void got_byte(size_t index) {
             // fall thru
             case 0x42: {
                 // TODO:
-                memset(dat_resp, 0, sizeof(dat_resp));
+                memcpy(dat_resp, &user_page->resp, sizeof(struct pad_response));
                 break;
             }
             case 0x44: {
@@ -459,9 +451,10 @@ static const struct proc_ops page_map_proc_ops = {
 };
 
 int init_module() {
+    BUILD_BUG_ON(sizeof(struct pad_response) != 18);
     // Configure proc entry
     struct proc_dir_entry* pde;
-    user_page = (struct user_comm*)__get_free_page(GFP_KERNEL | __GFP_ZERO);
+    user_page = (struct ps2pipad_uapi*)__get_free_page(GFP_KERNEL | __GFP_ZERO);
     if (!user_page) {
         pr_err("Couldn't allocate page\n");
         return -ENODEV;
